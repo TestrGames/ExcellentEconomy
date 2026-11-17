@@ -57,7 +57,8 @@ public class PayCommand implements CurrencyCommand {
                 return;
             }
 
-            this.manager.send(sender, targetUser, currency, amount);
+            // Issue #78: never mutate balances from the async loader thread.
+            this.manager.sendOnMainThread(sender, targetUser, currency, amount);
         });
         return true;
     }

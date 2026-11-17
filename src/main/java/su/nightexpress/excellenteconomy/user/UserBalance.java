@@ -69,6 +69,32 @@ public class UserBalance {
         this.balanceMap.compute(currencyId, (k, v) -> Math.max(0, (v == null ? 0D : v) - Math.abs(amount)));
     }
 
+    /**
+     * Atomically removes the given amount only if the current balance covers it.
+     * Unlike {@link #remove(String, double)}, this never clamps a partial withdrawal to zero,
+     * so a check-and-debit can't be split by a concurrent modification.
+     *
+     * @return true if the amount was removed, false if the balance was too low.
+     */
+    public boolean tryRemove(@NonNull ExcellentCurrency currency, double amount) {
+        return this.tryRemove(currency.getId(), amount);
+    }
+
+    public boolean tryRemove(@NonNull String currencyId, double amount) {
+        double toRemove = Math.abs(amount);
+        boolean[] removed = {false};
+
+        this.balanceMap.compute(currencyId, (k, v) -> {
+            double current = Math.max(0, v == null ? 0D : v);
+            if (current < toRemove) return v;
+
+            removed[0] = true;
+            return current - toRemove;
+        });
+
+        return removed[0];
+    }
+
     public void set(@NonNull ExcellentCurrency currency, double amount) {
         this.set(currency.getId(), currency.floorAndLimit(amount));
     }

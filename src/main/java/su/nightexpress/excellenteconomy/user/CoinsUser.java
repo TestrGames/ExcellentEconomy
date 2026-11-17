@@ -85,6 +85,48 @@ public class CoinsUser extends UserTemplate {
         this.editBalance(currency, lookup -> lookup.remove(currency, amount));
     }
 
+    /**
+     * Atomically withdraws the amount only if the balance covers it, then fires the ChangeBalanceEvent.
+     * If the event is cancelled, the amount is returned to the balance.
+     *
+     * @return true if the amount was actually withdrawn.
+     */
+    public boolean tryRemoveBalance(@NonNull ExcellentCurrency currency, double amount) {
+        double toRemove = Math.abs(amount);
+        if (!this.balance.tryRemove(currency, toRemove)) return false;
+
+        double newBalance = this.getBalance(currency);
+        ChangeBalanceEvent event = new ChangeBalanceEvent(this, currency, newBalance + toRemove, newBalance);
+        Bukkit.getPluginManager().callEvent(event);
+
+        if (event.isCancelled()) {
+            this.balance.add(currency, toRemove);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Adds the amount and fires the ChangeBalanceEvent.
+     *
+     * @return true if the deposit went through, false if the event was cancelled (balance restored).
+     */
+    public boolean tryAddBalance(@NonNull ExcellentCurrency currency, double amount) {
+        double toAdd = Math.abs(amount);
+        double oldBalance = this.getBalance(currency);
+
+        this.balance.add(currency, toAdd);
+
+        ChangeBalanceEvent event = new ChangeBalanceEvent(this, currency, oldBalance, this.getBalance(currency));
+        Bukkit.getPluginManager().callEvent(event);
+
+        if (event.isCancelled()) {
+            this.balance.remove(currency, toAdd);
+            return false;
+        }
+        return true;
+    }
+
     public void setBalance(@NonNull ExcellentCurrency currency, double amount) {
         this.editBalance(currency, lookup -> lookup.set(currency, amount));
     }

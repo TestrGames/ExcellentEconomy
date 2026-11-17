@@ -1,5 +1,6 @@
 package su.nightexpress.excellenteconomy.currency;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -684,6 +685,23 @@ public class CurrencyManager extends AbstractManager<EconomyPlugin> {
         return OperationResult.SUCCESS;
     }
 
+    /**
+     * Runs {@link #send(Player, CoinsUser, ExcellentCurrency, double)} on the main server thread,
+     * so concurrent transfers are serialized (issue #78).
+     */
+    public void sendOnMainThread(@NonNull Player sender, @NonNull CoinsUser targetUser,
+                                 @NonNull ExcellentCurrency currency, double rawAmount) {
+        if (Bukkit.isPrimaryThread()) {
+            this.send(sender, targetUser, currency, rawAmount);
+            return;
+        }
+
+        this.plugin.runTask(() -> {
+            if (!sender.isOnline()) return;
+            this.send(sender, targetUser, currency, rawAmount);
+        });
+    }
+
     public boolean send(@NonNull Player sender, @NonNull CoinsUser targetUser, @NonNull ExcellentCurrency currency,
                         double rawAmount) {
         OperationContext context = OperationContext.of(sender);
@@ -720,10 +738,21 @@ public class CurrencyManager extends AbstractManager<EconomyPlugin> {
             return false;
         }
 
-        targetUser.addBalance(currency, amount);
-        targetUser.markDirty();
-        fromUser.removeBalance(currency, amount);
+        // Fix for issue #78: debit the sender atomically FIRST (check-and-debit in one step),
+        // and credit the receiver only when the debit actually happened.
+        if (!fromUser.tryRemoveBalance(currency, amount)) {
+            currency.sendPrefixed(Lang.CURRENCY_SEND_ERROR_NOT_ENOUGH, sender);
+            return false;
+        }
         fromUser.markDirty();
+
+        if (!targetUser.tryAddBalance(currency, amount)) {
+            // Deposit was cancelled by a ChangeBalanceEvent listener, refund the sender.
+            fromUser.getBalance().add(currency, amount);
+            fromUser.markDirty();
+            return false;
+        }
+        targetUser.markDirty();
 
         currency.sendPrefixed(Lang.CURRENCY_SEND_DONE_SENDER, sender, builder -> builder
             .with(EconomyPlaceholders.GENERIC_AMOUNT, () -> currency.format(amount))
